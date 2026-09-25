@@ -62,8 +62,8 @@ token = dpapi:AQAAANCM...
 - Writes are atomic: write `gdup.conf.tmp`, then `File.Replace`/`File.Move(overwrite)`.
 - Scopes: `drive` (default) or `drive.file`.
 
-**OAuth flow:** installed-app loopback with PKCE (S256). Start `HttpListener` on
-`http://127.0.0.1:<free port>/`, open the system browser to
+**OAuth flow:** installed-app loopback with PKCE (S256). Listen with a raw `TcpListener` on
+`http://127.0.0.1:<free port>/` (no http.sys URL reservation or admin rights needed), open the system browser to
 `https://accounts.google.com/o/oauth2/v2/auth` with `access_type=offline&prompt=consent`,
 receive `code`, and exchange it at `https://oauth2.googleapis.com/token`. The user supplies
 their own Desktop-app OAuth client ID and secret; the wizard prints brief instructions.
@@ -159,7 +159,7 @@ src/Gdup/Gdup.csproj              net10.0-windows exe, AssemblyName gdup, System
   Drive/        DriveClient (folders), ResumableUploader, SessionStore, FileRangeContent
   Net/          NicSelector, BoundHandlerFactory
   Output/       ProgressReporter
-tests/Gdup.Tests/Gdup.Tests.csproj  xUnit, Microsoft.AspNetCore.TestHost or Kestrel on loopback
+tests/Gdup.Tests/Gdup.Tests.csproj  xUnit; fake Drive server implemented as an HttpMessageHandler
 ```
 
 Publish: `dotnet publish src/Gdup -c Release -r win-x64 --self-contained -p:PublishSingleFile=true`.
@@ -170,7 +170,7 @@ Publish: `dotnet publish src/Gdup -c Release -r win-x64 --self-contained -p:Publ
   rclone import (normal, missing client_id, encrypted header); `Range` header parsing;
   chunk-size parsing and validation (256 KiB multiples, suffixes, max); `--via` matching;
   session-state key and staleness.
-- **Integration (fake resumable server on loopback Kestrel):** a clean upload; a server that
+- **Integration (fake resumable server as an in-process `HttpMessageHandler`):** a clean upload; a server that
   commits only part of a chunk; the connection dropped mid-chunk; 503 and 429 bursts; 410 on the
   session (restart); a 401 that triggers a token refresh; a stall (server stops reading) that
   trips the watchdog; resuming from a state file after a simulated process restart. Every case
