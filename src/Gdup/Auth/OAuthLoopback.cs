@@ -15,8 +15,9 @@ namespace Gdup.Auth;
 public static class OAuthLoopback
 {
     public static async Task<OAuthToken> AuthorizeAsync(HttpClient http, string clientId, string clientSecret,
-        string scope, Action<string> openBrowser, CancellationToken ct)
+        string scope, Action<string> openBrowser, CancellationToken ct, TimeSpan? connectionReadTimeout = null)
     {
+        var readTimeout = connectionReadTimeout ?? TimeSpan.FromSeconds(5);
         using var listener = new TcpListener(IPAddress.Loopback, 0);
         listener.Start();
         var redirectUri = $"http://127.0.0.1:{((IPEndPoint)listener.LocalEndpoint).Port}/";
@@ -29,7 +30,18 @@ public static class OAuthLoopback
         {
             using var client = await listener.AcceptTcpClientAsync(ct);
             var stream = client.GetStream();
-            var query = await ReadQueryAsync(stream, ct);
+            using var readCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            readCts.CancelAfter(readTimeout);
+            NameValueCollection? query;
+            try
+            {
+                query = await ReadQueryAsync(stream, readCts.Token);
+            }
+            catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+            {
+                // Connection accepted but never sent a complete request line; drop it and keep listening.
+                continue;
+            }
             if (query is null || (query["code"] is null && query["error"] is null))
             {
                 await RespondAsync(stream, "404 Not Found", "Not found.", ct);
