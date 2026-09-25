@@ -17,6 +17,7 @@ public enum Fault
     Expire,
     CancelClient,
     SlowResponse,
+    CompleteViaQuery,
 }
 
 /// <summary>In-process imitation of Drive's resumable upload protocol with scripted per-chunk faults.</summary>
@@ -66,7 +67,9 @@ public sealed class FakeDriveServer : HttpMessageHandler
         if (url != _activeSession) return new HttpResponseMessage(HttpStatusCode.Gone);
 
         var range = request.Content?.Headers.ContentRange;
-        if (range is null || !range.HasRange)
+        if (range is null)
+            return new HttpResponseMessage(HttpStatusCode.BadRequest) { Content = new StringContent("missing Content-Range") };
+        if (!range.HasRange)
         {
             StatusQueries++;
             return Progress();
@@ -124,6 +127,17 @@ public sealed class FakeDriveServer : HttpMessageHandler
         }
 
         _committed.Write(body);
+
+        if (fault == Fault.CompleteViaQuery)
+        {
+            // Drive committed the final bytes but replies 308 instead of completing; the
+            // client must follow up with a status query rather than an empty PUT.
+            var response = new HttpResponseMessage((HttpStatusCode)308);
+            if (_committed.Length > 0)
+                response.Headers.TryAddWithoutValidation("Range", $"bytes=0-{_committed.Length - 1}");
+            return response;
+        }
+
         return Progress();
     }
 

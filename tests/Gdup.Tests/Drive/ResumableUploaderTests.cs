@@ -124,6 +124,35 @@ public class ResumableUploaderTests : IDisposable
     }
 
     [Fact]
+    public async Task RepeatedExpiry_WithoutProgress_ThrowsAfterThreeAttempts()
+    {
+        var (path, _) = MakeFile(900_000);
+        _server.ChunkFaults.Enqueue(Fault.Expire);
+        _server.ChunkFaults.Enqueue(Fault.Expire);
+        _server.ChunkFaults.Enqueue(Fault.Expire);
+
+        var ex = await Assert.ThrowsAsync<DriveApiException>(() => Uploader().UploadAsync(Request(path), CancellationToken.None));
+
+        Assert.Equal("sessionExpired", ex.Reason);
+        Assert.Equal(3, _server.SessionsStarted);
+    }
+
+    [Fact]
+    public async Task OffsetEqualsSizeWithoutCompletion_QueriesStatusInsteadOfEmptyPut()
+    {
+        var (path, data) = MakeFile(500_000);
+        _server.ChunkFaults.Enqueue(Fault.None);
+        _server.ChunkFaults.Enqueue(Fault.CompleteViaQuery);
+
+        var result = await Uploader().UploadAsync(Request(path), CancellationToken.None);
+
+        Assert.Equal(data, _server.Committed);
+        Assert.True(result.Md5Matches);
+        Assert.True(_server.StatusQueries >= 1);
+        Assert.Equal(1, _server.SessionsStarted);
+    }
+
+    [Fact]
     public async Task Unauthorized_RefreshesTokenOnce_AndContinues()
     {
         var (path, data) = MakeFile(500_000);

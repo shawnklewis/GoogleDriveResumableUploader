@@ -40,7 +40,7 @@ public sealed class ResumableUploader(
     string uploadBase = DriveClient.DefaultApiBase,
     Func<TimeSpan, CancellationToken, Task>? delay = null)
 {
-    private const double MaxBackoffSeconds = 64;
+    private const int MaxConsecutiveExpirations = 3;
     private readonly Func<TimeSpan, CancellationToken, Task> _delay = delay ?? Task.Delay;
 
     public async Task<UploadResult> UploadAsync(UploadRequest request, CancellationToken ct)
@@ -58,6 +58,7 @@ public sealed class ResumableUploader(
 
         var sessionUri = sessions.Load(key)?.SessionUri;
         var attempt = 0;
+        var consecutiveExpirations = 0;
         DriveFile? done = null;
         try
         {
@@ -81,16 +82,31 @@ public sealed class ResumableUploader(
                     while (step is { Completed: null, Expired: false })
                     {
                         progress.Position(step.Offset);
+                        if (size > 0 && step.Offset == size)
+                        {
+                            // Drive committed every byte but has not returned the file resource yet;
+                            // ask for status instead of sending another (empty) PUT.
+                            step = await QueryAsync(sessionUri, size, request.StallTimeout, ct);
+                            continue;
+                        }
                         var length = Math.Min(request.ChunkSize, size - step.Offset);
                         step = await SendChunkAsync(sessionUri, file.FullName, step.Offset, length, size, request.StallTimeout, ct);
                         attempt = 0;
+                        if (!step.Expired) consecutiveExpirations = 0;
                     }
 
                     if (step.Expired)
                     {
-                        progress.Event("Drive discarded the upload session; starting a new one from the beginning.");
+                        consecutiveExpirations++;
                         sessions.Delete(key);
                         sessionUri = null;
+                        if (consecutiveExpirations >= MaxConsecutiveExpirations)
+                        {
+                            throw new DriveApiException(410, "sessionExpired",
+                                $"Drive discarded the upload session {MaxConsecutiveExpirations} times in a row without progress; giving up.");
+                        }
+                        progress.Event("Drive discarded the upload session; starting a new one from the beginning.");
+                        await _delay(Backoff.For(consecutiveExpirations), ct);
                         continue;
                     }
 
@@ -99,7 +115,7 @@ public sealed class ResumableUploader(
                 catch (Exception ex) when (!ct.IsCancellationRequested && IsTransient(ex))
                 {
                     attempt++;
-                    var wait = Backoff(attempt);
+                    var wait = Backoff.For(attempt);
                     progress.Event($"Retry {attempt} in {wait.TotalSeconds:0.#}s: {ex.Message}");
                     await _delay(wait, ct);
                 }
@@ -132,33 +148,47 @@ public sealed class ResumableUploader(
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(request.StallTimeout);
 
-        using var response = await DriveHttp.SendAsync(http, tokens, () =>
+        try
         {
-            var message = new HttpRequestMessage(HttpMethod.Post, url)
+            using var response = await DriveHttp.SendAsync(http, tokens, () =>
             {
-                Content = new StringContent(metadata, Encoding.UTF8, "application/json"),
-            };
-            message.Headers.Add("X-Upload-Content-Type", ContentTypes.For(request.Name));
-            message.Headers.Add("X-Upload-Content-Length", size.ToString(CultureInfo.InvariantCulture));
-            return message;
-        }, HttpCompletionOption.ResponseContentRead, timeout.Token);
+                var message = new HttpRequestMessage(HttpMethod.Post, url)
+                {
+                    Content = new StringContent(metadata, Encoding.UTF8, "application/json"),
+                };
+                message.Headers.Add("X-Upload-Content-Type", ContentTypes.For(request.Name));
+                message.Headers.Add("X-Upload-Content-Length", size.ToString(CultureInfo.InvariantCulture));
+                return message;
+            }, HttpCompletionOption.ResponseContentRead, timeout.Token);
 
-        if (!response.IsSuccessStatusCode) throw await DriveApiException.FromResponseAsync(response, ct);
-        return response.Headers.Location?.AbsoluteUri
-            ?? throw new DriveApiException((int)response.StatusCode, "noLocation", "Drive did not return an upload session URI.");
+            if (!response.IsSuccessStatusCode) throw await DriveApiException.FromResponseAsync(response, ct);
+            return response.Headers.Location?.AbsoluteUri
+                ?? throw new DriveApiException((int)response.StatusCode, "noLocation", "Drive did not return an upload session URI.");
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new TimeoutException($"Drive did not answer within {request.StallTimeout.TotalSeconds:0.#} s; retrying.");
+        }
     }
 
     private async Task<Step> QueryAsync(string sessionUri, long size, TimeSpan stallTimeout, CancellationToken ct)
     {
         using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
         timeout.CancelAfter(stallTimeout);
-        using var response = await DriveHttp.SendAsync(http, tokens, () =>
+        try
         {
-            var content = new ByteArrayContent([]);
-            content.Headers.ContentRange = new ContentRangeHeaderValue(size); // bytes */size
-            return new HttpRequestMessage(HttpMethod.Put, sessionUri) { Content = content };
-        }, HttpCompletionOption.ResponseContentRead, timeout.Token);
-        return await InterpretAsync(response, ct);
+            using var response = await DriveHttp.SendAsync(http, tokens, () =>
+            {
+                var content = new ByteArrayContent([]);
+                content.Headers.ContentRange = new ContentRangeHeaderValue(size); // bytes */size
+                return new HttpRequestMessage(HttpMethod.Put, sessionUri) { Content = content };
+            }, HttpCompletionOption.ResponseContentRead, timeout.Token);
+            return await InterpretAsync(response, ct);
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            throw new TimeoutException($"Drive did not answer within {stallTimeout.TotalSeconds:0.#} s; retrying.");
+        }
     }
 
     private async Task<Step> SendChunkAsync(string sessionUri, string path, long offset, long length, long size,
@@ -177,7 +207,9 @@ public sealed class ResumableUploader(
                 if (length == 0) // zero-byte file: an empty PUT completes the upload
                 {
                     clock.MarkBodySent();
-                    return new HttpRequestMessage(HttpMethod.Put, sessionUri) { Content = new ByteArrayContent([]) };
+                    var emptyContent = new ByteArrayContent([]);
+                    emptyContent.Headers.ContentRange = new ContentRangeHeaderValue(size); // bytes */0
+                    return new HttpRequestMessage(HttpMethod.Put, sessionUri) { Content = emptyContent };
                 }
 
                 var position = offset;
@@ -250,12 +282,6 @@ public sealed class ResumableUploader(
             HttpRequestException or IOException or TimeoutException or OperationCanceledException => true,
             _ => false,
         };
-    }
-
-    private static TimeSpan Backoff(int attempt)
-    {
-        var cap = Math.Min(MaxBackoffSeconds, Math.Pow(2, attempt));
-        return TimeSpan.FromSeconds(cap / 2 + Random.Shared.NextDouble() * cap / 2);
     }
 
     private static Task<string> ComputeMd5Async(string path, CancellationToken ct) => Task.Run(async () =>
