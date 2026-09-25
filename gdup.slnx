@@ -1,0 +1,8 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Gdup/Gdup.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Gdup.Tests/Gdup.Tests.csproj" />
+  </Folder>
+</Solution>
