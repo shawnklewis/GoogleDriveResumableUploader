@@ -119,7 +119,10 @@ Without `--via`, a normal connect is used.
 6. **Verify:** a background task computes the file's MD5 with `IncrementalHash`, starting when
    the upload starts. Compare it with `md5Checksum` from the final response. A mismatch
    prints both values and the file ID and exits 3; the Drive file is left in place. The state
-   file is deleted on success or on a mismatch.
+   file is deleted on success or on a mismatch. If the local MD5 read fails (e.g. an I/O error)
+   after Drive has already confirmed the upload, the checksum is treated as unverified — a
+   line is logged ("checksum not verified") and the upload is still reported as a success,
+   rather than failing a completed upload over a local read error.
 
 **Transport settings:** one `HttpClient`/`SocketsHttpHandler` per run, HTTP/1.1 only,
 `PooledConnectionLifetime = infinite`, per-request timeout = infinite (the stall watchdog
@@ -130,7 +133,8 @@ covers hangs), socket `SendBufferSize = 8 MiB`, `NoDelay = true`.
 | Condition | Action |
 |---|---|
 | Network exception, IOException, 5xx, 429, 403 `rateLimitExceeded`/`userRateLimitExceeded` | Back off exponentially with full jitter (1s → 64s cap), do a status query, and resume. Retry for as long as the session is valid. |
-| No bytes sent for `--stall-timeout` seconds | Cancel the request and treat it as a network error |
+| No bytes sent for `--stall-timeout` seconds while a chunk's body is being written | Cancel the request and treat it as a network error |
+| No response from Drive for `max(5 minutes, 5 × --stall-timeout)` after a chunk's body has been fully sent | Cancel and treat it as a network error (reconnect); this is a separate, longer deadline from the body-write stall timeout, since draining a full send buffer and Drive finalizing the chunk can legitimately take longer than the stall timeout on a slow uplink |
 | 401 | Refresh the token once and retry; if it still fails, the auth error is fatal (exit 2) |
 | 403 `storageQuotaExceeded`, `uploadLimitExceeded` / daily 750 GB limit, other 4xx | Fatal, with a readable message; the state file is kept (exit 2) |
 | 404/410 on the session | Start a new session (see step 4) |

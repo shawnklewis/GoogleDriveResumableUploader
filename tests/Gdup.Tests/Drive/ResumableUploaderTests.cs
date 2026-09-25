@@ -96,6 +96,19 @@ public class ResumableUploaderTests : IDisposable
     }
 
     [Fact]
+    public async Task SlowResponseAfterBody_IsNotTreatedAsStall()
+    {
+        var (path, data) = MakeFile(600_000);
+        _server.ChunkFaults.Enqueue(Fault.SlowResponse);
+
+        var result = await Uploader().UploadAsync(Request(path, stallSeconds: 0.3), CancellationToken.None);
+
+        Assert.Equal(data, _server.Committed);
+        Assert.True(result.Md5Matches);
+        Assert.DoesNotContain(_progress.Events, e => e.StartsWith("Retry"));
+    }
+
+    [Fact]
     public async Task ExpiredSession_StartsANewSessionFromZero()
     {
         var (path, data) = MakeFile(900_000);

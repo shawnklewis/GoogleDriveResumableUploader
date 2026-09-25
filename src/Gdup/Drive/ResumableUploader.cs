@@ -10,10 +10,12 @@ namespace Gdup.Drive;
 
 public sealed record UploadRequest(string FilePath, string RemoteName, string FolderId, string Name, long ChunkSize, TimeSpan StallTimeout);
 
-public sealed record UploadResult(string FileId, string Name, long Size, string? DriveMd5, string LocalMd5)
+public sealed record UploadResult(string FileId, string Name, long Size, string? DriveMd5, string? LocalMd5)
 {
-    /// <summary>null when Drive did not report a checksum.</summary>
-    public bool? Md5Matches => DriveMd5 is null ? null : string.Equals(DriveMd5, LocalMd5, StringComparison.OrdinalIgnoreCase);
+    /// <summary>null when Drive did not report a checksum, or the local MD5 could not be computed.</summary>
+    public bool? Md5Matches => DriveMd5 is null || LocalMd5 is null
+        ? null
+        : string.Equals(DriveMd5, LocalMd5, StringComparison.OrdinalIgnoreCase);
 }
 
 public interface IUploadProgress
@@ -105,7 +107,16 @@ public sealed class ResumableUploader(
 
             progress.Position(size);
             sessions.Delete(key);
-            var localMd5 = await md5Task;
+            string? localMd5;
+            try
+            {
+                localMd5 = await md5Task;
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                progress.Event($"Could not compute the local MD5 ({ex.Message}); checksum not verified.");
+                localMd5 = null;
+            }
             return new UploadResult(done.Id, done.Name, done.Size >= 0 ? done.Size : size, done.Md5, localMd5);
         }
         finally
@@ -155,14 +166,19 @@ public sealed class ResumableUploader(
     {
         using var stallCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
         var clock = new ActivityClock();
-        var watchdog = WatchAsync(clock, stallTimeout, stallCts);
+        var responseTimeout = ResponseTimeoutFor(stallTimeout);
+        var watchdog = WatchAsync(clock, stallTimeout, responseTimeout, stallCts);
         try
         {
             using var response = await DriveHttp.SendAsync(http, tokens, () =>
             {
-                clock.Touch();
+                // Reset for each attempt: the 401-resend path invokes this factory again.
+                clock.Reset();
                 if (length == 0) // zero-byte file: an empty PUT completes the upload
+                {
+                    clock.MarkBodySent();
                     return new HttpRequestMessage(HttpMethod.Put, sessionUri) { Content = new ByteArrayContent([]) };
+                }
 
                 var position = offset;
                 var content = new FileRangeContent(path, offset, length, sent =>
@@ -170,6 +186,8 @@ public sealed class ResumableUploader(
                     clock.Touch();
                     position += sent;
                     progress.Position(position);
+                    if (position >= offset + length)
+                        clock.MarkBodySent();
                 });
                 content.Headers.ContentRange = new ContentRangeHeaderValue(offset, offset + length - 1, size);
                 return new HttpRequestMessage(HttpMethod.Put, sessionUri) { Content = content };
@@ -178,7 +196,9 @@ public sealed class ResumableUploader(
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            throw new TimeoutException($"No upload progress for {stallTimeout.TotalSeconds:0.#} s; reconnecting.");
+            throw clock.BodySent
+                ? new TimeoutException($"No response from Drive for {responseTimeout.TotalSeconds:0.#} s after sending a chunk; reconnecting.")
+                : new TimeoutException($"No upload progress for {stallTimeout.TotalSeconds:0.#} s; reconnecting.");
         }
         finally
         {
@@ -186,6 +206,10 @@ public sealed class ResumableUploader(
             await watchdog;
         }
     }
+
+    /// <summary>How long to wait for Drive's reply once a chunk's body has been fully written.</summary>
+    internal static TimeSpan ResponseTimeoutFor(TimeSpan stallTimeout) =>
+        TimeSpan.FromSeconds(Math.Max(300, 5 * stallTimeout.TotalSeconds));
 
     private static async Task<Step> InterpretAsync(HttpResponseMessage response, CancellationToken ct)
     {
@@ -241,7 +265,8 @@ public sealed class ResumableUploader(
         return Convert.ToHexStringLower(await MD5.HashDataAsync(stream, ct));
     }, ct);
 
-    private static async Task WatchAsync(ActivityClock clock, TimeSpan stallTimeout, CancellationTokenSource stallCts)
+    private static async Task WatchAsync(ActivityClock clock, TimeSpan stallTimeout, TimeSpan responseTimeout,
+        CancellationTokenSource stallCts)
     {
         var tick = TimeSpan.FromMilliseconds(Math.Clamp(stallTimeout.TotalMilliseconds / 4, 10, 1000));
         try
@@ -249,7 +274,8 @@ public sealed class ResumableUploader(
             while (!stallCts.IsCancellationRequested)
             {
                 await Task.Delay(tick, stallCts.Token);
-                if (clock.Idle > stallTimeout)
+                var timedOut = clock.BodySent ? clock.SinceBodySent > responseTimeout : clock.Idle > stallTimeout;
+                if (timedOut)
                 {
                     await stallCts.CancelAsync();
                     return;
@@ -265,10 +291,23 @@ public sealed class ResumableUploader(
     private sealed class ActivityClock
     {
         private long _last = Stopwatch.GetTimestamp();
+        private long _bodySent;
 
         public TimeSpan Idle => Stopwatch.GetElapsedTime(Interlocked.Read(ref _last));
 
+        public bool BodySent => Interlocked.Read(ref _bodySent) != 0;
+
+        public TimeSpan SinceBodySent => Stopwatch.GetElapsedTime(Interlocked.Read(ref _bodySent));
+
         public void Touch() => Interlocked.Exchange(ref _last, Stopwatch.GetTimestamp());
+
+        public void MarkBodySent() => Interlocked.Exchange(ref _bodySent, Stopwatch.GetTimestamp());
+
+        public void Reset()
+        {
+            Touch();
+            Interlocked.Exchange(ref _bodySent, 0);
+        }
     }
 
     private sealed record DriveFile(string Id, string Name, long Size, string? Md5);

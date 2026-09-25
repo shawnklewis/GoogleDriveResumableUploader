@@ -16,6 +16,7 @@ public enum Fault
     Stall,
     Expire,
     CancelClient,
+    SlowResponse,
 }
 
 /// <summary>In-process imitation of Drive's resumable upload protocol with scripted per-chunk faults.</summary>
@@ -100,6 +101,13 @@ public sealed class FakeDriveServer : HttpMessageHandler
                 _activeSession = null;
                 _committed.SetLength(0);
                 return new HttpResponseMessage(HttpStatusCode.Gone);
+            case Fault.SlowResponse:
+            {
+                var slowBody = await request.Content!.ReadAsByteArrayAsync(ct);
+                await Task.Delay(TimeSpan.FromSeconds(1), ct);
+                _committed.Write(slowBody);
+                return Progress();
+            }
         }
 
         var body = await request.Content!.ReadAsByteArrayAsync(ct);

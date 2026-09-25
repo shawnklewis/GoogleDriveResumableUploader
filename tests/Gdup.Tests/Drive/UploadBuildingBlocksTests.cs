@@ -23,6 +23,15 @@ public class UploadBuildingBlocksTests
         Assert.Throws<FormatException>(() => ResumeOffset.Parse("bytes=0-x"));
     }
 
+    [Theory]
+    [InlineData(0.3, 300)]
+    [InlineData(120, 600)]
+    public void ResponseTimeoutFor_IsAtLeastFiveMinutes_OrFiveTimesStall(double stallSeconds, double expectedSeconds)
+    {
+        var actual = ResumableUploader.ResponseTimeoutFor(TimeSpan.FromSeconds(stallSeconds));
+        Assert.Equal(TimeSpan.FromSeconds(expectedSeconds), actual);
+    }
+
     [Fact]
     public void ResumeOffset_FromResponse_ReadsRangeHeaderOf308()
     {
