@@ -52,4 +52,18 @@ public class SessionStoreTests
 
         Assert.Equal(new[] { "current", "other" }, store.List().Select(e => e.Key).Order());
     }
+
+    [Fact]
+    public void Load_CorruptStateFile_ReturnsNull()
+    {
+        using var dir = new TempDir();
+        var store = new SessionStore(dir.File("sessions"));
+        var corruptPath = Path.Combine(dir.File("sessions"), "bad.json");
+        Directory.CreateDirectory(Path.GetDirectoryName(corruptPath)!);
+        File.WriteAllText(corruptPath, "{ not json");
+
+        var result = store.Load("bad");
+
+        Assert.Null(result);
+    }
 }

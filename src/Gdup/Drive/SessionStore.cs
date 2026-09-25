@@ -30,7 +30,16 @@ public sealed class SessionStore(string directory)
     public SessionState? Load(string key)
     {
         var path = PathFor(key);
-        return File.Exists(path) ? JsonSerializer.Deserialize<SessionState>(File.ReadAllText(path)) : null;
+        if (!File.Exists(path)) return null;
+        try
+        {
+            return JsonSerializer.Deserialize<SessionState>(File.ReadAllText(path));
+        }
+        catch (JsonException)
+        {
+            // Corrupt state file: treat as missing; the upload will simply start a new session.
+            return null;
+        }
     }
 
     public void Save(string key, SessionState state)
