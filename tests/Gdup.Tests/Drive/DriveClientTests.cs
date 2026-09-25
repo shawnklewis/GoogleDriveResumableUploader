@@ -90,4 +90,56 @@ public class DriveClientTests
     {
         Assert.Equal(@"it\'s a \\ test", DriveClient.Escape(@"it's a \ test"));
     }
+
+    private static Task NoDelay(TimeSpan _, CancellationToken __) => Task.CompletedTask;
+
+    [Fact]
+    public async Task TransientStatus_IsRetried_AndEventuallySucceeds()
+    {
+        var calls = 0;
+        var handler = new StubHandler((_, _) => ++calls == 1
+            ? Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable))
+            : Ok("""{"files":[{"id":"x-id"}]}"""));
+        var drive = new DriveClient(new HttpClient(handler), new FakeTokens(), "https://fake.local", delay: NoDelay);
+
+        var id = await drive.ResolveFolderAsync("", "X", CancellationToken.None);
+
+        Assert.Equal("x-id", id);
+        Assert.Equal(2, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task FiveConsecutive503s_ThrowsDriveApiException()
+    {
+        var handler = new StubHandler((_, _) => Task.FromResult(new HttpResponseMessage(HttpStatusCode.ServiceUnavailable)));
+        var drive = new DriveClient(new HttpClient(handler), new FakeTokens(), "https://fake.local", delay: NoDelay);
+
+        var ex = await Assert.ThrowsAsync<DriveApiException>(() => drive.ResolveFolderAsync("", "X", CancellationToken.None));
+
+        Assert.Equal(503, ex.StatusCode);
+        Assert.Equal(5, handler.Requests.Count);
+    }
+
+    [Fact]
+    public async Task RequestNeverAnswers_EventuallyThrowsTimeoutException()
+    {
+        var handler = new StubHandler(async (_, ct) => { await Task.Delay(Timeout.Infinite, ct); return null!; });
+        var drive = new DriveClient(new HttpClient(handler), new FakeTokens(), "https://fake.local",
+            requestTimeout: TimeSpan.FromMilliseconds(100), delay: NoDelay);
+
+        await Assert.ThrowsAsync<TimeoutException>(() => drive.ResolveFolderAsync("", "X", CancellationToken.None));
+    }
+
+    [Fact]
+    public async Task StorageQuotaExceeded_IsNotRetried()
+    {
+        var handler = new StubHandler((_, _) => Task.FromResult(StubHandler.Json(HttpStatusCode.Forbidden,
+            """{"error":{"code":403,"message":"Quota exceeded","errors":[{"reason":"storageQuotaExceeded"}]}}""")));
+        var drive = new DriveClient(new HttpClient(handler), new FakeTokens(), "https://fake.local", delay: NoDelay);
+
+        var ex = await Assert.ThrowsAsync<DriveApiException>(() => drive.ResolveFolderAsync("", "X", CancellationToken.None));
+
+        Assert.Equal("storageQuotaExceeded", ex.Reason);
+        Assert.Single(handler.Requests);
+    }
 }
