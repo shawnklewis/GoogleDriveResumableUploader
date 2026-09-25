@@ -11,7 +11,9 @@ root.Subcommands.Add(ResumeCommand.Create());
 using var cts = new CancellationTokenSource();
 Console.CancelKeyPress += (_, e) =>
 {
-    e.Cancel = true;
+    // First Ctrl+C: cancel gracefully and let the process keep running to save state.
+    // Second Ctrl+C (cts already cancelled): let the default handler terminate the process.
+    e.Cancel = !cts.IsCancellationRequested;
     cts.Cancel();
 };
 

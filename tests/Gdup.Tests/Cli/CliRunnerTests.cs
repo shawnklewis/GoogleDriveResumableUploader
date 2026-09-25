@@ -60,4 +60,17 @@ public class CliRunnerTests
         Assert.Equal(ExitCodes.Failed, code);
         Assert.Contains("gdup resume", error.ToString());
     }
+
+    [Fact]
+    public async Task Cancellation_TreatsAnyExceptionAsCancellation_WhenTokenIsCancelled()
+    {
+        using var cts = new CancellationTokenSource();
+        await cts.CancelAsync();
+        var error = new StringWriter();
+
+        var code = await CliRunner.RunAsync(() => throw new IOException("socket aborted"), cts.Token, error);
+
+        Assert.Equal(ExitCodes.Failed, code);
+        Assert.Contains("Cancelled", error.ToString());
+    }
 }

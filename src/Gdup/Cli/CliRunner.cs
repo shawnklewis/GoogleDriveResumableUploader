@@ -21,10 +21,12 @@ public static class CliRunner
         {
             return await body();
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        // Once the token is cancelled, any exception (e.g. an IOException from an aborted socket,
+        // not just OperationCanceledException) is a symptom of the cancellation, not a real failure.
+        catch (Exception) when (ct.IsCancellationRequested)
         {
             error.WriteLine();
-            error.WriteLine("Cancelled. Run the same command again, or `gdup resume`, to continue where it stopped.");
+            error.WriteLine("Cancelled. If an upload was interrupted, run the same command again or `gdup resume` to continue.");
             return ExitCodes.Failed;
         }
         catch (Exception ex) when (ex is UsageException or NicNotFoundException or RcloneConfigEncryptedException or ConfigCorruptException)
