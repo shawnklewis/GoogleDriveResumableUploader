@@ -132,13 +132,14 @@ covers hangs), socket `SendBufferSize = 8 MiB`, `NoDelay = true`.
 
 | Condition | Action |
 |---|---|
-| Network exception, IOException, 5xx, 429, 403 `rateLimitExceeded`/`userRateLimitExceeded` | Back off exponentially with full jitter (1s → 64s cap), do a status query, and resume. Retry for as long as the session is valid. |
+| Network exception, IOException, 5xx, 429, 403 `rateLimitExceeded`/`userRateLimitExceeded` | Back off exponentially with equal jitter (half fixed + half random, 1s → 64s cap), do a status query, and resume. Retry for as long as the session is valid. |
 | No bytes sent for `--stall-timeout` seconds while a chunk's body is being written | Cancel the request and treat it as a network error |
 | No response from Drive for `max(5 minutes, 5 × --stall-timeout)` after a chunk's body has been fully sent | Cancel and treat it as a network error (reconnect); this is a separate, longer deadline from the body-write stall timeout, since draining a full send buffer and Drive finalizing the chunk can legitimately take longer than the stall timeout on a slow uplink |
 | 401 | Refresh the token once and retry; if it still fails, the auth error is fatal (exit 2) |
 | 403 `storageQuotaExceeded`, `uploadLimitExceeded` / daily 750 GB limit, other 4xx | Fatal, with a readable message; the state file is kept (exit 2) |
-| 404/410 on the session | Start a new session (see step 4) |
-| Ctrl+C | Cancel, print "resume with: gdup upload ... or gdup resume", exit 2; state is kept |
+| 404/410 on the session | Start a new session (see step 4), backing off first. After 3 consecutive expirations with no upload progress in between, give up with a fatal `sessionExpired` error (exit 2) instead of restarting forever |
+| The metadata calls in step 1 (`files.list`/`files.create`) time out or fail transiently | Each call runs under its own request timeout (default 60s) and is retried up to 5 times with the same equal-jitter backoff as chunk uploads; a non-transient error (e.g. 403 `storageQuotaExceeded`) fails immediately without retrying |
+| Ctrl+C | Cancel, print "resume with: gdup upload ... or gdup resume", exit 2; state is kept. A second Ctrl+C force-terminates the process |
 | Local file changed (size/mtime differ from the state) | Start a new session; the old state is deleted |
 
 ## Progress output

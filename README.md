@@ -31,3 +31,7 @@ Exit codes: 0 ok, 1 usage/config error, 2 upload failed, 3 checksum mismatch.
 
 Drive accepts only one ordered stream per file, so `--via` chooses the link; it does not
 combine links.
+
+With the default `drive.file` OAuth scope, gdup can only see folders it has itself created
+(or that were explicitly shared with the app), so an existing folder path it didn't create
+will look empty and get duplicated rather than reused.
