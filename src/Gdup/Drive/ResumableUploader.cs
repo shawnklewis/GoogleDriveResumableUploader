@@ -196,7 +196,7 @@ public sealed class ResumableUploader(
         }
         catch (OperationCanceledException) when (!ct.IsCancellationRequested)
         {
-            throw clock.BodySent
+            throw clock.BodySentAt != 0
                 ? new TimeoutException($"No response from Drive for {responseTimeout.TotalSeconds:0.#} s after sending a chunk; reconnecting.")
                 : new TimeoutException($"No upload progress for {stallTimeout.TotalSeconds:0.#} s; reconnecting.");
         }
@@ -274,7 +274,10 @@ public sealed class ResumableUploader(
             while (!stallCts.IsCancellationRequested)
             {
                 await Task.Delay(tick, stallCts.Token);
-                var timedOut = clock.BodySent ? clock.SinceBodySent > responseTimeout : clock.Idle > stallTimeout;
+                var sentAt = clock.BodySentAt;
+                var timedOut = sentAt != 0
+                    ? Stopwatch.GetElapsedTime(sentAt) > responseTimeout
+                    : clock.Idle > stallTimeout;
                 if (timedOut)
                 {
                     await stallCts.CancelAsync();
@@ -295,9 +298,7 @@ public sealed class ResumableUploader(
 
         public TimeSpan Idle => Stopwatch.GetElapsedTime(Interlocked.Read(ref _last));
 
-        public bool BodySent => Interlocked.Read(ref _bodySent) != 0;
-
-        public TimeSpan SinceBodySent => Stopwatch.GetElapsedTime(Interlocked.Read(ref _bodySent));
+        public long BodySentAt => Interlocked.Read(ref _bodySent);
 
         public void Touch() => Interlocked.Exchange(ref _last, Stopwatch.GetTimestamp());
 

@@ -71,6 +71,19 @@ public class UploadBuildingBlocksTests
         await Assert.ThrowsAnyAsync<LocalFileChangedException>(() => content.ReadAsByteArrayAsync());
     }
 
+    [Fact]
+    public void UploadResult_Md5Matches_NullWhenEitherChecksumMissing()
+    {
+        Assert.Null(new UploadResult("id", "n", 1, "abc", null).Md5Matches);
+        Assert.Null(new UploadResult("id", "n", 1, null, "abc").Md5Matches);
+    }
+
+    [Fact]
+    public void UploadResult_Md5Matches_TrueWhenEqualIgnoringCase()
+    {
+        Assert.True(new UploadResult("id", "n", 1, "ABC123", "abc123").Md5Matches);
+    }
+
     [Theory]
     [InlineData("movie.MKV", "video/x-matroska")]
     [InlineData("a.mp4", "video/mp4")]
