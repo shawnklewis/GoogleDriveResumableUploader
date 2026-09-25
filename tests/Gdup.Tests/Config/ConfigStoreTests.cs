@@ -83,4 +83,30 @@ public class ConfigStoreTests
         Assert.Null(x.Token);
         Assert.Equal("", x.ClientSecret);
     }
+
+    [Fact]
+    public void Load_UndecryptableSecret_ThrowsConfigCorrupt()
+    {
+        using var dir = new TempDir();
+        var path = dir.File("gdup.conf");
+        File.WriteAllText(path,
+            "[r]\ntype = drive\nclient_id = cid\nclient_secret = dpapi:AAAA\nscope = drive\n");
+        var store = new ConfigStore(path);
+
+        var ex = Assert.Throws<ConfigCorruptException>(() => store.Load("r"));
+        Assert.Contains("gdup config", ex.Message);
+    }
+
+    [Fact]
+    public void Load_CorruptToken_ThrowsConfigCorrupt()
+    {
+        using var dir = new TempDir();
+        var path = dir.File("gdup.conf");
+        File.WriteAllText(path,
+            "[r]\ntype = drive\nclient_id = cid\nscope = drive\ntoken = {not json\n");
+        var store = new ConfigStore(path);
+
+        var ex = Assert.Throws<ConfigCorruptException>(() => store.Load("r"));
+        Assert.Contains("gdup config", ex.Message);
+    }
 }

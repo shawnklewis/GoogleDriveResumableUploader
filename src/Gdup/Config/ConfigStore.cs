@@ -2,6 +2,9 @@ using Gdup.Auth;
 
 namespace Gdup.Config;
 
+/// <summary>Thrown when config secrets cannot be read due to decryption, encoding, or JSON parsing failures.</summary>
+public sealed class ConfigCorruptException(string message, Exception inner) : Exception(message, inner);
+
 /// <summary>Reads and writes remotes in gdup.conf; secrets are DPAPI-encrypted on save.</summary>
 public sealed class ConfigStore(string path)
 {
@@ -17,13 +20,40 @@ public sealed class ConfigStore(string path)
         var s = Read().Get(name);
         if (s is null) return null;
         var token = s["token"];
-        return new Remote(
-            s.Name,
-            s["client_id"] ?? "",
-            Dpapi.Unprotect(s["client_secret"] ?? ""),
-            string.IsNullOrEmpty(s["scope"]) ? "drive" : s["scope"]!,
-            s["root_folder_id"] ?? "",
-            string.IsNullOrEmpty(token) ? null : OAuthToken.FromJson(Dpapi.Unprotect(token)));
+        try
+        {
+            var unprotectedSecret = Dpapi.Unprotect(s["client_secret"] ?? "");
+            OAuthToken? parsedToken = null;
+            if (!string.IsNullOrEmpty(token))
+            {
+                parsedToken = OAuthToken.FromJson(Dpapi.Unprotect(token));
+            }
+            return new Remote(
+                s.Name,
+                s["client_id"] ?? "",
+                unprotectedSecret,
+                string.IsNullOrEmpty(s["scope"]) ? "drive" : s["scope"]!,
+                s["root_folder_id"] ?? "",
+                parsedToken);
+        }
+        catch (System.Security.Cryptography.CryptographicException ex)
+        {
+            throw new ConfigCorruptException(
+                $"Cannot read the saved secrets for remote '{name}' in {FilePath} (created by another Windows user or PC, or damaged). Delete and re-create it with: gdup config",
+                ex);
+        }
+        catch (FormatException ex)
+        {
+            throw new ConfigCorruptException(
+                $"Cannot read the saved secrets for remote '{name}' in {FilePath} (created by another Windows user or PC, or damaged). Delete and re-create it with: gdup config",
+                ex);
+        }
+        catch (System.Text.Json.JsonException ex)
+        {
+            throw new ConfigCorruptException(
+                $"Cannot read the saved secrets for remote '{name}' in {FilePath} (created by another Windows user or PC, or damaged). Delete and re-create it with: gdup config",
+                ex);
+        }
     }
 
     public void Save(Remote remote)
