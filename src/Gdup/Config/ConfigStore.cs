@@ -36,19 +36,7 @@ public sealed class ConfigStore(string path)
                 s["root_folder_id"] ?? "",
                 parsedToken);
         }
-        catch (System.Security.Cryptography.CryptographicException ex)
-        {
-            throw new ConfigCorruptException(
-                $"Cannot read the saved secrets for remote '{name}' in {FilePath} (created by another Windows user or PC, or damaged). Delete and re-create it with: gdup config",
-                ex);
-        }
-        catch (FormatException ex)
-        {
-            throw new ConfigCorruptException(
-                $"Cannot read the saved secrets for remote '{name}' in {FilePath} (created by another Windows user or PC, or damaged). Delete and re-create it with: gdup config",
-                ex);
-        }
-        catch (System.Text.Json.JsonException ex)
+        catch (Exception ex) when (ex is System.Security.Cryptography.CryptographicException or FormatException or System.Text.Json.JsonException)
         {
             throw new ConfigCorruptException(
                 $"Cannot read the saved secrets for remote '{name}' in {FilePath} (created by another Windows user or PC, or damaged). Delete and re-create it with: gdup config",
