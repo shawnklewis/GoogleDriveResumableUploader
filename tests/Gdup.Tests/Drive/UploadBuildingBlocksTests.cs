@@ -60,6 +60,25 @@ public class UploadBuildingBlocksTests
     }
 
     [Fact]
+    public async Task FileRangeContent_WritesInSlicesOfAtMostOneMiB()
+    {
+        using var dir = new TempDir();
+        var data = new byte[5_000_000];
+        new Random(7).NextBytes(data);
+        var path = dir.File("data.bin");
+        File.WriteAllBytes(path, data);
+        var increments = new List<long>();
+
+        using var content = new FileRangeContent(path, 0, data.Length, n => increments.Add(n));
+        var bytes = await content.ReadAsByteArrayAsync();
+
+        Assert.Equal(data, bytes);
+        Assert.NotEmpty(increments);
+        Assert.All(increments, n => Assert.True(n <= FileRangeContent.WriteSliceSize, $"increment {n} exceeded {FileRangeContent.WriteSliceSize}"));
+        Assert.Equal(data.Length, increments.Sum());
+    }
+
+    [Fact]
     public async Task FileRangeContent_FileShorterThanRange_Throws()
     {
         using var dir = new TempDir();

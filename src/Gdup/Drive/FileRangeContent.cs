@@ -10,6 +10,10 @@ public sealed class FileRangeContent(string path, long offset, long length, Acti
 {
     public const int BufferSize = 4 * 1024 * 1024;
 
+    /// <summary>Reads use BufferSize, but each read is written to the network stream in slices no
+    /// larger than this, so the stall watchdog sees activity more often than once per 4 MiB.</summary>
+    public const int WriteSliceSize = 1024 * 1024;
+
     protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context) =>
         SerializeToStreamAsync(stream, context, CancellationToken.None);
 
@@ -27,9 +31,15 @@ public sealed class FileRangeContent(string path, long offset, long length, Acti
                 var read = await file.ReadAsync(buffer.AsMemory(0, (int)Math.Min(BufferSize, remaining)), ct);
                 if (read == 0)
                     throw new LocalFileChangedException($"{path} ended {remaining} bytes early; the file changed during upload.");
-                await stream.WriteAsync(buffer.AsMemory(0, read), ct);
+                var written = 0;
+                while (written < read)
+                {
+                    var slice = Math.Min(WriteSliceSize, read - written);
+                    await stream.WriteAsync(buffer.AsMemory(written, slice), ct);
+                    written += slice;
+                    onBytesSent(slice);
+                }
                 remaining -= read;
-                onBytesSent(read);
             }
         }
         finally
