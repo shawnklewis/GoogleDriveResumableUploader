@@ -17,8 +17,42 @@ public class ResumableUploaderTests : IDisposable
 
     private static Task NoDelay(TimeSpan _, CancellationToken __) => Task.CompletedTask;
 
-    private ResumableUploader Uploader() =>
-        new(new HttpClient(_server, disposeHandler: false), _tokens, _store, _progress, FakeDriveServer.UploadBase, NoDelay);
+    private ResumableUploader Uploader(Func<string, Stream>? openRead = null) =>
+        new(new HttpClient(_server, disposeHandler: false), _tokens, _store, _progress, FakeDriveServer.UploadBase, NoDelay, openRead);
+
+    [Fact]
+    public async Task DiskReadErrorThatClears_IsRetried_AndUploadCompletes()
+    {
+        var (path, data) = MakeFile(1_000_000);
+        var opened = 0;
+
+        // The second open is the first attempt at chunk 1: one bad read there, then the disk "recovers".
+        var result = await Uploader(p => new FailingReadStream(File.OpenRead(p), Chunk + 10, Chunk + 11,
+            failures: ++opened == 2 ? 1 : 0)).UploadAsync(Request(path), CancellationToken.None);
+
+        Assert.Equal(data, _server.Committed);
+        Assert.True(result.Md5Matches);
+        Assert.Single(_progress.Events, e => e.StartsWith("Local read failed (1/3)"));
+    }
+
+    [Fact]
+    public async Task PersistentDiskReadError_StopsAfterThreeAttempts_WithClearError()
+    {
+        var (path, _) = MakeFile(1_000_000);
+        var opened = 0;
+
+        var ex = await Assert.ThrowsAsync<LocalFileReadException>(() => Uploader(p =>
+        {
+            opened++;
+            return new FailingReadStream(File.OpenRead(p), Chunk + 10, Chunk + 11, failures: -1);
+        }).UploadAsync(Request(path), CancellationToken.None));
+
+        Assert.Equal(Chunk, ex.Offset);
+        Assert.Contains(path, ex.Message);
+        Assert.Equal(1 + 3, opened); // chunk 0, then chunk 1 attempted 3 times
+        Assert.Equal(2, _progress.Events.Count(e => e.StartsWith("Local read failed")));
+        Assert.Single(_store.List()); // session kept so the upload can resume after the disk is fixed
+    }
 
     private (string Path, byte[] Data) MakeFile(int size, string name = "big.mkv")
     {

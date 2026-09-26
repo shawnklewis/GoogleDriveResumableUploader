@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using System.Runtime.ExceptionServices;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Text;
@@ -38,9 +39,11 @@ public sealed class ResumableUploader(
     SessionStore sessions,
     IUploadProgress progress,
     string uploadBase = DriveClient.DefaultApiBase,
-    Func<TimeSpan, CancellationToken, Task>? delay = null)
+    Func<TimeSpan, CancellationToken, Task>? delay = null,
+    Func<string, Stream>? openRead = null)
 {
     private const int MaxConsecutiveExpirations = 3;
+    private const int MaxLocalReadAttempts = 3;
     private readonly Func<TimeSpan, CancellationToken, Task> _delay = delay ?? Task.Delay;
 
     public async Task<UploadResult> UploadAsync(UploadRequest request, CancellationToken ct)
@@ -59,6 +62,7 @@ public sealed class ResumableUploader(
         var sessionUri = sessions.Load(key)?.SessionUri;
         var attempt = 0;
         var consecutiveExpirations = 0;
+        var localReadFailures = 0;
         DriveFile? done = null;
         try
         {
@@ -92,6 +96,7 @@ public sealed class ResumableUploader(
                         var length = Math.Min(request.ChunkSize, size - step.Offset);
                         step = await SendChunkAsync(sessionUri, file.FullName, step.Offset, length, size, request.StallTimeout, ct);
                         attempt = 0;
+                        localReadFailures = 0;
                         if (!step.Expired) consecutiveExpirations = 0;
                     }
 
@@ -111,6 +116,18 @@ public sealed class ResumableUploader(
                     }
 
                     done = step.Completed;
+                }
+                catch (Exception ex) when (!ct.IsCancellationRequested && FindInChain<LocalFileReadException>(ex) is not null)
+                {
+                    // A disk read error can clear on retry (USB hiccup), but a bad block won't:
+                    // a few quick attempts, then stop with the disk error instead of looping forever.
+                    var readError = FindInChain<LocalFileReadException>(ex)!;
+                    localReadFailures++;
+                    if (localReadFailures >= MaxLocalReadAttempts)
+                        ExceptionDispatchInfo.Throw(readError);
+                    var wait = Backoff.For(localReadFailures);
+                    progress.Event($"Local read failed ({localReadFailures}/{MaxLocalReadAttempts}), retrying in {wait.TotalSeconds:0.#}s: {readError.Message}");
+                    await _delay(wait, ct);
                 }
                 catch (Exception ex) when (!ct.IsCancellationRequested && IsTransient(ex))
                 {
@@ -220,7 +237,7 @@ public sealed class ResumableUploader(
                     progress.Position(position);
                     if (position >= offset + length)
                         clock.MarkBodySent();
-                });
+                }, openRead);
                 content.Headers.ContentRange = new ContentRangeHeaderValue(offset, offset + length - 1, size);
                 return new HttpRequestMessage(HttpMethod.Put, sessionUri) { Content = content };
             }, HttpCompletionOption.ResponseContentRead, stallCts.Token);
@@ -273,7 +290,8 @@ public sealed class ResumableUploader(
     {
         for (var e = ex; e is not null; e = e.InnerException)
         {
-            if (e is LocalFileChangedException or FileNotFoundException or DirectoryNotFoundException or UnauthorizedAccessException)
+            if (e is LocalFileChangedException or LocalFileReadException or FileNotFoundException
+                or DirectoryNotFoundException or UnauthorizedAccessException)
                 return false;
         }
         return ex switch
@@ -282,6 +300,15 @@ public sealed class ResumableUploader(
             HttpRequestException or IOException or TimeoutException or OperationCanceledException => true,
             _ => false,
         };
+    }
+
+    private static T? FindInChain<T>(Exception ex) where T : Exception
+    {
+        for (var e = ex; e is not null; e = e.InnerException)
+        {
+            if (e is T match) return match;
+        }
+        return null;
     }
 
     private static Task<string> ComputeMd5Async(string path, CancellationToken ct) => Task.Run(async () =>

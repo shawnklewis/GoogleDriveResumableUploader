@@ -91,6 +91,23 @@ public class UploadBuildingBlocksTests
     }
 
     [Fact]
+    public async Task FileRangeContent_DiskReadError_ThrowsLocalFileReadExceptionWithOffset()
+    {
+        using var dir = new TempDir();
+        var path = dir.File("bad.bin");
+        File.WriteAllBytes(path, new byte[10_000_000]);
+
+        using var content = new FileRangeContent(path, 1_000_000, 8_000_000, _ => { },
+            p => new FailingReadStream(File.OpenRead(p), 6_000_000, 6_000_001, failures: -1));
+
+        var ex = await Assert.ThrowsAnyAsync<LocalFileReadException>(() => content.ReadAsByteArrayAsync());
+        Assert.Equal(path, ex.FilePath);
+        Assert.Equal(1_000_000 + FileRangeContent.BufferSize, ex.Offset);
+        Assert.IsType<IOException>(ex.InnerException);
+        Assert.Contains("bad block", ex.Message);
+    }
+
+    [Fact]
     public void UploadResult_Md5Matches_NullWhenEitherChecksumMissing()
     {
         Assert.Null(new UploadResult("id", "n", 1, "abc", null).Md5Matches);
