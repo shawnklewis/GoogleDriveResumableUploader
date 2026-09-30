@@ -1,0 +1,70 @@
+name: Release
+
+# Builds gdup.exe on GitHub's runners, attaches a signed build-provenance attestation,
+# and publishes it to the GitHub release for the tag.
+#
+#   Automatic: push a tag like v1.2.3  ->  builds that tag, creates the release.
+#   Manual:    Actions > Release > Run workflow, enter an existing tag  ->  rebuilds it and
+#              replaces the release's gdup.exe (use this to add an attestation to an older release).
+#
+# Anyone can then verify a download with:
+#   gh attestation verify gdup.exe --repo kurtnelle/GoogleDriveResumableUploader
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing tag to build and publish (e.g. v1.0.0)
+        required: true
+
+permissions:
+  contents: write       # create the release and upload assets
+  id-token: write       # sign the attestation (Sigstore, via GitHub OIDC)
+  attestations: write   # store the attestation on the repository
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ env.TAG }}
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Test
+        run: dotnet test --configuration Release
+
+      - name: Publish gdup.exe
+        shell: pwsh
+        run: |
+          $version = $env:TAG.TrimStart('v')
+          dotnet publish src/Gdup -c Release -r win-x64 --self-contained `
+            -p:PublishSingleFile=true -p:DebugType=none -p:Version=$version -o publish
+          $hash = (Get-FileHash publish/gdup.exe -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  gdup.exe" | Set-Content -NoNewline -Encoding ascii publish/gdup.exe.sha256
+          Get-Content publish/gdup.exe.sha256
+
+      - name: Attest build provenance
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: publish/gdup.exe
+
+      - name: Publish GitHub release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view $env:TAG *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $env:TAG publish/gdup.exe publish/gdup.exe.sha256 --clobber
+          } else {
+            gh release create $env:TAG publish/gdup.exe publish/gdup.exe.sha256 `
+              --title "gdup $env:TAG" --generate-notes
+          }

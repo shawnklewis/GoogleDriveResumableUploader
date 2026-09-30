@@ -35,3 +35,18 @@ combine links.
 With the default `drive.file` OAuth scope, gdup can only see folders it has itself created
 (or that were explicitly shared with the app), so an existing folder path it didn't create
 will look empty and get duplicated rather than reused.
+
+## Verifying a download
+
+Release builds of `gdup.exe` are built by GitHub Actions from this repository and carry a signed
+build-provenance attestation. To confirm that a downloaded exe was built here, from a specific
+commit, and not modified since:
+
+```
+gh attestation verify gdup.exe --repo kurtnelle/GoogleDriveResumableUploader
+```
+
+The exe is not code-signed yet, so Windows SmartScreen may warn on first run (**More info → Run anyway**).
+
+To publish a release, push a version tag (for example `git tag v1.2.0` then `git push origin v1.2.0`).
+The Release workflow tests, builds, attests, and uploads `gdup.exe` with its `.sha256` checksum.
