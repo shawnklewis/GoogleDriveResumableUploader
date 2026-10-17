@@ -1,3 +1,4 @@
+using Gdup.Auth;
 using Gdup.Cli;
 using Gdup.Config;
 using Gdup.Drive;
@@ -72,5 +73,35 @@ public class CliRunnerTests
 
         Assert.Equal(ExitCodes.Failed, code);
         Assert.Contains("Cancelled", error.ToString());
+    }
+
+    [Fact]
+    public async Task AuthExpired_InvalidGrant_ExplainsTestingModeExpiry()
+    {
+        var error = new StringWriter();
+        var code = await CliRunner.RunAsync(
+            () => throw new AuthExpiredException("gdrive", new OAuthException("invalid_grant", "Token has been expired or revoked.")),
+            CancellationToken.None, error);
+
+        Assert.Equal(ExitCodes.Failed, code);
+        Assert.Equal(
+            "error: Google rejected the saved sign-in. If your consent screen is still in Testing, Google expires sign-ins after 7 days. "
+            + "Publish it at https://console.cloud.google.com/auth/audience, then run: gdup config reconnect gdrive" + Environment.NewLine,
+            error.ToString());
+    }
+
+    [Theory]
+    [InlineData("invalid_client")]
+    [InlineData("unauthorized_client")]
+    public async Task AuthExpired_OtherErrors_KeepReconnectMessage(string oauthError)
+    {
+        var error = new StringWriter();
+        var code = await CliRunner.RunAsync(
+            () => throw new AuthExpiredException("gdrive", new OAuthException(oauthError, "The OAuth client was not found.")),
+            CancellationToken.None, error);
+
+        Assert.Equal(ExitCodes.Failed, code);
+        Assert.Contains("Google rejected the saved sign-in for 'gdrive'. Run: gdup config reconnect gdrive", error.ToString());
+        Assert.DoesNotContain("7 days", error.ToString());
     }
 }

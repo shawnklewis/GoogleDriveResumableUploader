@@ -1,3 +1,4 @@
+using Gdup.Auth;
 using Gdup.Config;
 using Gdup.Net;
 
@@ -34,12 +35,21 @@ public static class CliRunner
             error.WriteLine($"error: {ex.Message}");
             return ExitCodes.Usage;
         }
+        catch (AuthExpiredException ex) when (ex.InnerException is OAuthException { Error: "invalid_grant" })
+        {
+            error.WriteLine($"error: {TestingModeExpiryHint(ex.RemoteName)}");
+            return ExitCodes.Failed;
+        }
         catch (Exception ex)
         {
             error.WriteLine($"error: {Describe(ex)}");
             return ExitCodes.Failed;
         }
     }
+
+    internal static string TestingModeExpiryHint(string remoteName) =>
+        "Google rejected the saved sign-in. If your consent screen is still in Testing, Google expires sign-ins after 7 days. "
+        + $"Publish it at https://console.cloud.google.com/auth/audience, then run: gdup config reconnect {remoteName}";
 
     internal static string Describe(Exception ex)
     {
