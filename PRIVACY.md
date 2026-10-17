@@ -3,8 +3,8 @@
 _Last updated: 17 October 2026_
 
 gdup is a command-line tool that runs on your own Windows computer and uploads files
-you choose to **your own** Google Drive. It is published by Shawn K. Lewis
-(shawnklewis@gmail.com). There is no gdup server: the developer does not receive,
+you choose to **your own** Google Drive. It is published by Shawn K. Lewis.
+There is no gdup server: the developer does not receive,
 see, store or share any of your data.
 
 ## What gdup accesses
@@ -59,4 +59,4 @@ for advertising or to train AI/ML models.
 ## Changes and contact
 
 Changes to this policy are published in this file in the repository. Questions:
-shawnklewis@gmail.com.
+open an issue at <https://github.com/shawnklewis/GoogleDriveResumableUploader/issues>.
