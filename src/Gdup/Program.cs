@@ -2,6 +2,7 @@ using System.CommandLine;
 using Gdup.Cli;
 
 var root = new RootCommand("gdup - fast resumable uploads of large files to Google Drive");
+root.Subcommands.Add(SetupCommand.Create());
 root.Subcommands.Add(ConfigCommands.Create());
 root.Subcommands.Add(NicsCommand.Create());
 root.Subcommands.Add(UploadCommand.Create());

@@ -9,7 +9,10 @@ public interface IAccessTokenSource
 }
 
 public sealed class AuthExpiredException(string remoteName, Exception inner)
-    : Exception($"Google rejected the saved sign-in for '{remoteName}'. Run: gdup config reconnect {remoteName}", inner);
+    : Exception($"Google rejected the saved sign-in for '{remoteName}'. Run: gdup config reconnect {remoteName}", inner)
+{
+    public string RemoteName { get; } = remoteName;
+}
 
 /// <summary>Hands out access tokens, refreshing near expiry and persisting refreshed tokens.</summary>
 public sealed class TokenProvider : IAccessTokenSource

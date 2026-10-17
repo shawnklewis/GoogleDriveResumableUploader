@@ -11,11 +11,14 @@ internal static class ConfigCommands
 {
     private const string ClientHelp = """
 
-        gdup signs in with your own Google OAuth client (type: Desktop app):
+        gdup signs in with your own Google OAuth client (type: Desktop app).
+        Easiest: quit and run `gdup setup`, which walks you through it. By hand:
           1. Enable the Drive API: https://console.cloud.google.com/apis/library/drive.googleapis.com
-          2. Create the client:    https://console.cloud.google.com/apis/credentials
-             -> Create credentials -> OAuth client ID -> Application type: Desktop app
-          3. Paste the client ID and client secret below.
+          2. Consent screen:       https://console.cloud.google.com/auth/branding
+             then Publish app at   https://console.cloud.google.com/auth/audience (Testing signs you out every 7 days)
+          3. Create the client:    https://console.cloud.google.com/auth/clients/create
+             -> Application type: Desktop app -> Create -> Download JSON
+          4. Give the JSON path below, or paste the client ID and secret.
 
         """;
 
@@ -85,15 +88,16 @@ internal static class ConfigCommands
         while (true)
         {
             name = Prompt.AskRequired("Name for the new remote");
-            if (name.IndexOfAny([':', '[', ']']) >= 0) Console.WriteLine("  Names cannot contain ':', '[' or ']'.");
-            else if (store.Load(name) is not null) Console.WriteLine($"  Remote '{name}' already exists.");
-            else break;
+            var error = RemoteNameError(store, name);
+            if (error is null) break;
+            Console.WriteLine("  " + error);
         }
         Console.WriteLine(ClientHelp);
+        var client = AskClient();
         var remote = new Remote(
             name,
-            Prompt.AskRequired("Client ID"),
-            Prompt.AskRequired("Client secret"),
+            client.ClientId,
+            client.ClientSecret,
             AskScope("drive"),
             Prompt.Ask("Root folder ID (blank = My Drive)"),
             Token: null);
@@ -119,6 +123,30 @@ internal static class ConfigCommands
             edited = await SignInAsync(edited with { Token = null }, ct);
         store.Save(edited);
         Console.WriteLine($"Remote '{name}' saved.");
+    }
+
+    /// <summary>Null when <paramref name="name"/> can be used for a new remote, otherwise why not.</summary>
+    internal static string? RemoteNameError(ConfigStore store, string name) =>
+        name.IndexOfAny([':', '[', ']']) >= 0 ? "Names cannot contain ':', '[' or ']'."
+        : store.Load(name) is not null ? $"Remote '{name}' already exists."
+        : null;
+
+    private static ClientSecretFile AskClient()
+    {
+        while (true)
+        {
+            var path = Prompt.Ask("Path to client_secret JSON (blank to type the ID and secret)");
+            if (path.Length == 0)
+                return new ClientSecretFile(Prompt.AskRequired("Client ID"), Prompt.AskRequired("Client secret"));
+            try
+            {
+                return ClientSecretFile.Load(path);
+            }
+            catch (UsageException ex)
+            {
+                Console.WriteLine("  " + ex.Message);
+            }
+        }
     }
 
     private static string AskScope(string current)
@@ -200,12 +228,8 @@ internal static class ConfigCommands
         {
             Console.WriteLine("This rclone remote uses rclone's built-in OAuth client, which gdup cannot reuse.");
             Console.WriteLine(ClientHelp);
-            remote = remote with
-            {
-                ClientId = Prompt.AskRequired("Client ID"),
-                ClientSecret = Prompt.AskRequired("Client secret"),
-                Token = null,
-            };
+            var client = AskClient();
+            remote = remote with { ClientId = client.ClientId, ClientSecret = client.ClientSecret, Token = null };
         }
         if (remote.Token is null) remote = await SignInAsync(remote, ct);
 
@@ -214,23 +238,28 @@ internal static class ConfigCommands
         return ExitCodes.Ok;
     }
 
-    private static async Task<Remote> SignInAsync(Remote remote, CancellationToken ct)
+    internal static async Task<Remote> SignInAsync(Remote remote, CancellationToken ct)
     {
         Console.WriteLine("Opening your browser to sign in to Google. If it does not open, visit:");
         using var http = HttpClientFactory.Create(null);
         var token = await OAuthLoopback.AuthorizeAsync(http, remote.ClientId, remote.ClientSecret, remote.Scope, url =>
         {
             Console.WriteLine(url);
-            try
-            {
-                Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
-            }
-            catch (Win32Exception)
-            {
-                // No browser registered; the user can open the printed URL.
-            }
+            OpenBrowser(url);
         }, ct);
         Console.WriteLine("Signed in.");
         return remote with { Token = token };
+    }
+
+    internal static void OpenBrowser(string url)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Win32Exception)
+        {
+            // No browser registered; the user can open the printed URL.
+        }
     }
 }
