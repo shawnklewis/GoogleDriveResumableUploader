@@ -8,7 +8,7 @@ name: Release
 #              replaces the release's gdup.exe (use this to add an attestation to an older release).
 #
 # Anyone can then verify a download with:
-#   gh attestation verify gdup.exe --repo kurtnelle/GoogleDriveResumableUploader
+#   gh attestation verify gdup.exe --repo shawnklewis/GoogleDriveResumableUploader
 
 on:
   push:

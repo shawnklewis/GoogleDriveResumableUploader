@@ -1,9 +1,9 @@
 # Privacy Policy — gdup (Google Drive Resumable Uploader)
 
-_Last updated: 16 October 2026_
+_Last updated: 17 October 2026_
 
 gdup is a command-line tool that runs on your own Windows computer and uploads files
-you choose to **your own** Google Drive. It is published by kurtnelle
+you choose to **your own** Google Drive. It is published by Shawn K. Lewis
 (shawnklewis@gmail.com). There is no gdup server: the developer does not receive,
 see, store or share any of your data.
 

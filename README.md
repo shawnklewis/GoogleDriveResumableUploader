@@ -43,7 +43,7 @@ build-provenance attestation. To confirm that a downloaded exe was built here, f
 commit, and not modified since:
 
 ```
-gh attestation verify gdup.exe --repo kurtnelle/GoogleDriveResumableUploader
+gh attestation verify gdup.exe --repo shawnklewis/GoogleDriveResumableUploader
 ```
 
 The exe is not code-signed yet, so Windows SmartScreen may warn on first run (**More info → Run anyway**).
